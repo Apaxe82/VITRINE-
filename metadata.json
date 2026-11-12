@@ -1,0 +1,6 @@
+{
+  "name": "Vitrine",
+  "description": "WhatsApp-first sales platform for Angolan merchants (photo to AI listing to verified payment and order fulfilment).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
