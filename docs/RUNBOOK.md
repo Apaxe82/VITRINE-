@@ -13,9 +13,10 @@
 5. **Start Web Service (Production Bundle)**: `npm run build && npm start` (runs `node dist/server.js`; any `NODE_ENV` other than `development` runs in production mode).
 6. **Start Worker Service**: `npm run worker:dev`.
 
-## 2. Database Authentication Policy (CRITICAL)
+## 2. Database Authentication & Logging Policy (CRITICAL)
 - **Production Must NEVER Use `trust` Authentication**: Production `pg_hba.conf` MUST enforce `scram-sha-256` (or mTLS client certificates) for all `vitrine_*` roles (`vitrine_app`, `vitrine_public`, `vitrine_admin`, `vitrine_registration`) and for `migrator`.
 - **CI Exception Only**: Ephemeral `POSTGRES_HOST_AUTH_METHOD=trust` is permitted ONLY inside isolated, short-lived CI service containers so `db/tests/test_v7.py` can connect across all roles without running the operator password script in Job A.
+- **No `log_statement = 'all'` During Provisioning**: Operator and bootstrap `psql` variables (`:'migrator_password'`, `:'app_password'`, `:'tenant_secret_hex'`, etc.) expand client-side into SQL literals before transmission. Production PostgreSQL instances MUST NOT run with `log_statement = 'all'` (or equivalent full SQL statement logging) while passwords or tenant secrets are provisioned.
 
 ## 3. Incident Triage
 - **Failed Webhooks**: Check dead-letter queues in Redis/BullMQ or application error logs.

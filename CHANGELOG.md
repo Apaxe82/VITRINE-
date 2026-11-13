@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed - 2026-11-13 (Task 1A.1: Remediation of Shipped Internal Files & Secret Scan Findings)
+- **Shipped Internal Files Removed & Guarded**:
+  - Deleted `public/assets/aistudio/` and added `public/assets/aistudio/` to `.gitignore`.
+  - Configured `publicDir: false` in `vite.config.ts`.
+  - Added a post-build CI check in `.github/workflows/ci.yml` failing and printing paths if `dist/` contains `.sql`, `.md`, `.py`, `.env`, or `.log` files or any `aistudio` directory.
+  - Extended CI production smoke test to verify `GET /assets/aistudio/x` and `GET /db/migrations/0001_DB_v7.sql` do not return bodies containing `"vitrine_core"` or `"CREATE SCHEMA"`.
+- **Recursive Dist Secret Scanner (`scripts/scan-dist.mjs`)**:
+  - Replaced the inline CI bundle scan with `scripts/scan-dist.mjs` (recursively walks `dist/index.html` and `dist/assets`, skipping directories and reading files only) and added `scripts/scan-dist.d.ts`.
+  - Added `scripts/scan-dist.test.ts` testing clean nested fixtures and planted secret failures via Vitest.
+- **Documentation**:
+  - Updated `docs/RUNBOOK.md` warning against `log_statement = 'all'` in production while provisioning client-side expanded `psql` variables.
+  - Added `Task 1A.1` (`In review`) in `docs/STATUS.md` while keeping `Task 1A` (`In review`).
+
 ### Changed - 2026-11-13 (Task 1A Amendments A–G)
 - **Amendment A (Amended Rule 3 — Exact Money Boundary)**:
   - Added `parseNumericToMoney`, `moneyToNumericString`, and `addMoney` in `packages/shared/src/index.ts` using strict regex + `BigInt` string parsing/formatting (zero `Number()`/`parseFloat()` on decimal strings), enforced `Number.isSafeInteger` in `createMoney`, and updated `formatMoney` to pure string manipulation.

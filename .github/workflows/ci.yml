@@ -216,53 +216,39 @@ jobs:
       - name: Build Client & Server Bundles
         run: npm run build
 
-      - name: Verify Client Bundle Contains No Secrets or .env.example Values
+      - name: Verify No Internal or Forbidden Files in dist/
         run: |
           node -e '
             const fs = require("fs");
             const path = require("path");
-            const envLines = fs.readFileSync(".env.example", "utf8").split(/\r?\n/);
-            const ignoredScalars = new Set(["development", "production", "true", "false"]);
-            const envValues = [];
-            for (const line of envLines) {
-              const trimmed = line.trim();
-              if (!trimmed || trimmed.startsWith("#")) continue;
-              const eq = trimmed.indexOf("=");
-              if (eq === -1) continue;
-              const key = trimmed.slice(0, eq).trim();
-              let val = trimmed.slice(eq + 1).trim();
-              if ((val.startsWith("\"") && val.endsWith("\"")) || (val.startsWith("\x27") && val.endsWith("\x27"))) {
-                val = val.slice(1, -1);
-              }
-              if (!val || ignoredScalars.has(val) || /^\d+$/.test(val)) continue;
-              envValues.push({ key, val });
-            }
-            const clientFiles = ["dist/index.html"];
-            if (fs.existsSync("dist/assets")) {
-              for (const f of fs.readdirSync("dist/assets")) {
-                const full = path.join("dist/assets", f);
-                if (fs.statSync(full).isFile()) {
-                  clientFiles.push(full);
+            const forbiddenExtensions = [".sql", ".md", ".py", ".env", ".log"];
+            const offending = [];
+            function walk(dir) {
+              for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+                const full = path.join(dir, entry.name);
+                if (entry.isDirectory()) {
+                  if (entry.name === "aistudio") {
+                    offending.push(full + "/");
+                  }
+                  walk(full);
+                } else if (entry.isFile()) {
+                  const lower = entry.name.toLowerCase();
+                  if (forbiddenExtensions.some((ext) => lower.endsWith(ext))) {
+                    offending.push(full);
+                  }
                 }
               }
             }
-            const findings = [];
-            for (const file of clientFiles) {
-              const content = fs.readFileSync(file, "utf8");
-              if (content.includes("GEMINI")) findings.push(`${file}: contains "GEMINI"`);
-              if (content.includes("API_KEY")) findings.push(`${file}: contains "API_KEY"`);
-              for (const { key, val } of envValues) {
-                if (content.includes(val)) {
-                  findings.push(`${file}: contains .env.example value for ${key}`);
-                }
-              }
-            }
-            if (findings.length > 0) {
-              console.error("Client bundle leak check failed:\n" + findings.join("\n"));
+            walk("dist");
+            if (offending.length > 0) {
+              console.error("Forbidden files or folders found in dist/:\n" + offending.join("\n"));
               process.exit(1);
             }
-            console.log(`Client bundle secret scan passed (${clientFiles.length} files checked).`);
+            console.log("Verified dist/ contains no forbidden internal files or aistudio directories.");
           '
+
+      - name: Verify Client Bundle Contains No Secrets or .env.example Values
+        run: node scripts/scan-dist.mjs
 
       - name: Run Test Suites as vitrine_app
         env:
@@ -287,6 +273,14 @@ jobs:
               test "$ROOT_STATUS" = "200"
               grep -qi "^content-type: text/html" /tmp/smoke_headers.txt
               grep -qi "<div id=\"root\">" /tmp/smoke_root.html
+              for check_path in "/assets/aistudio/x" "/db/migrations/0001_DB_v7.sql"; do
+                curl -sS -o /tmp/smoke_probe.txt "http://127.0.0.1:3000${check_path}"
+                if grep -Fq "vitrine_core" /tmp/smoke_probe.txt || grep -Fq "CREATE SCHEMA" /tmp/smoke_probe.txt; then
+                  echo "ERROR: ${check_path} returned internal SQL content!"
+                  exit 1
+                fi
+              done
+              rm -f /tmp/smoke_root.html /tmp/smoke_headers.txt /tmp/smoke_probe.txt
               echo "Production smoke test passed."
               exit 0
             fi
