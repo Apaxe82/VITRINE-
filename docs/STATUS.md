@@ -1,42 +1,54 @@
 # Project Status: Vitrine
 
-> Current operational status, Phase 1 capability tracking, and task completion log for Vitrine.
+> Current operational status, BUILD_PLAN_v8 P0 requirements tracking, and task log for Vitrine.
 
 ## Overview
-Vitrine is a WhatsApp-first sales platform for Angolan merchants that turns product photos into AI-drafted listings, requires explicit merchant approval, generates shareable checkout links, processes orders and verified payments (e.g., Multicaixa Express / bank transfers), and tracks fulfilment and reconciliation.
+Vitrine is a WhatsApp-first sales platform for Angolan merchants that turns product photos into AI-drafted listings, requires explicit merchant confirmation, generates shareable checkout links, processes orders and verified payments, and tracks fulfilment and reconciliation.
 
-## Phase 1 Capabilities Status
+Allowed requirement statuses (per `docs/BUILD_PLAN_v8.md` §15): `Not started` | `In progress` | `Implemented` | `Tested` | `Pilot verified`.
 
-| Capability ID | Capability Description | Status | Notes |
+## Phase 1 Pilot Requirements (`docs/BUILD_PLAN_v8.md` P0 Only)
+
+All FR IDs below correspond directly to `docs/BUILD_PLAN_v8.md` §3.
+
+| ID | P0 Requirement Summary | v8 Priority | Status |
 |---|---|---|---|
-| CAP-001 | Merchant Onboarding & Profile Registry | **NOT STARTED** | E.164 phone registry & merchant tenant setup |
-| CAP-002 | PostgreSQL 16 Schema, Migrator/App Roles & RLS | **NOT STARTED** | Bootstrap roles defined; baseline `DB_v7.sql` pending |
-| CAP-003 | Object Storage Media Pipeline (S3-compatible) | **NOT STARTED** | Photo & payment receipt upload/storage adapter |
-| CAP-004 | WhatsApp Webhook Ingestion & Signature Verification | **NOT STARTED** | Inbound photo & interactive reply ingestion |
-| CAP-005 | AI-Assisted Listing Draft Generation (Server-Side Gemini) | **NOT STARTED** | Photo -> structured draft listing in `AOA` minor units |
-| CAP-006 | Merchant Approval Gate (`DRAFT` -> `PENDING_CONFIRMATION` -> `PUBLISHED`) | **NOT STARTED** | Strict human confirmation; AI never auto-publishes |
-| CAP-007 | Shareable Product Link & Single-Item Storefront (Web) | **NOT STARTED** | Mobile buyer page (`/p/:slug`) |
-| CAP-008 | Single-Item Buyer Order Creation & Checkout | **NOT STARTED** | Single-item checkout only (no cart) |
-| CAP-009 | Payment Submission & Verification | **NOT STARTED** | Multicaixa Express / transfer proof verification |
-| CAP-010 | Merchant Order Notification & WhatsApp Alerts | **NOT STARTED** | Instant WhatsApp alert on paid/submitted orders |
-| CAP-011 | Order Fulfilment & Delivery State Machine | **NOT STARTED** | Fulfilment tracking & completion |
-| CAP-012 | Merchant Daily Reconciliation Summary | **NOT STARTED** | Daily settlement & integer minor-unit totals |
-| CAP-013 | Background Job Queue & Retries (Worker + Redis / BullMQ) | **NOT STARTED** | Async jobs for media, AI drafts, and alerts |
+| FR-1 | Merchant registers through verified chat identity; store and subdomain auto-provisioned | P0 | Not started |
+| FR-2 | Merchant adds a product using a photo and optional free text | P0 | Not started |
+| FR-3 | AI extracts structured draft with provenance and field-level uncertainty; merchant confirms before publication | P0 | Not started |
+| FR-4 | Deterministic buyer catalogue lookup using approved fields (semantic/RAG deferred) | P1; basic lookup P0 | Not started |
+| FR-5 | Buyer checks out without creating an account | P0 | Not started |
+| FR-6 | System creates real provider payment request (labelled manual-payment workflow only before live provider approval) | P0 | Not started |
+| FR-7 | Signed payment events persisted, deduplicated, matched by reference/amount/currency, applied idempotently | P0 | Not started |
+| FR-8 | Merchant receives payment confirmation notification after verified payment | P0 | Not started |
+| FR-9 | Order, payment, fulfilment, and payout states tracked independently with append-only history | P0 | Not started |
+| FR-10 | Merchant can view open orders and basic sales totals through chat | P0 | Not started |
+| FR-12 | Lightweight public store and product pages exist as shareable link targets | P0 | Not started |
+| FR-13 | Direct-to-merchant settlement or merchant payment sub-account evaluation as provider-selection gate | P0 decision; implementation provider-dependent | Not started |
+| FR-15 | Simple pilot fee reporting (full fee configurability deferred to P2) | P2; simple pilot fee reporting P0 | Not started |
+| FR-17 | Paid-order notification itemizes actual platform and provider deductions | P0 | Not started |
+| FR-18 | Checkout creates atomic, expiring stock reservation; payment consumes it and expiry releases it | P0 | Not started |
+| FR-19 | Products without available stock excluded from public purchase and buyer recommendations | P0 | Not started |
+| FR-21 | Paid orders carry fulfilment due times and overdue reminders | P0 | Not started |
+| FR-22 | Merchant can list, ship, and complete orders using short chat commands | P0 | Not started |
+| FR-29 | Basic support case handling for buyer disputes (payout freeze is Conditional P0) | Conditional P0 for platform-held funds; basic support case P0 | Not started |
+| FR-33 | Every proactive WhatsApp notification uses an approved template appropriate to purpose and consent basis | P0 | Not started |
 
 ## Task Log
 
 | Task | Scope | Status | Summary |
 |---|---|---|---|
-| **Task 0** | Initial Repository Scaffold | **COMPLETE** | Monolith folder layout (`apps/web`, `apps/worker`, `packages/shared`, `db/`, `docs/`, `.github/workflows/`), docs skeleton, baseline placeholder `0001_DB_v7.sql`, and initial `/health` endpoint. |
-| **Task 0.1** | Review Remediation & CI Hardening | **COMPLETE** | Added `pg` driver with `/health/live` and `/health/ready` (`SELECT 1`, 2s timeout, no env/uptime leak), separated `vitrine_migrator` and `vitrine_app` roles with runtime psql password variables, enabled strict TypeScript (`strict`, `noUncheckedIndexedAccess`, `noImplicitOverride`), added `esbuild` production bundle (`dist/server.js`) with dynamic dev-only Vite import, generated `package-lock.json`, and hardened CI gates (secret scan, migration order, `ON_ERROR_STOP=1`, CI DB readiness test, production smoke test). |
+| **Task 0** | Initial Repository Scaffold | Accepted (reviewer: Claude, 2026-11-13) | Monolith folder layout (`apps/web`, `apps/worker`, `packages/shared`, `db/`, `docs/`, `.github/workflows/`), docs skeleton, and initial `/health` endpoint. |
+| **Task 0.1** | Review Remediation & CI Hardening | Accepted (reviewer: Claude, 2026-11-13) | Added `pg` driver with `/health/live` and `/health/ready` (`SELECT 1`, 2s timeout, no env/uptime leak), strict TypeScript, `esbuild` production bundle (`dist/server.js`) with dynamic dev-only Vite import, `package-lock.json`, and hardened CI gates. |
+| **Task 1A** | Align Repo with `DB_v7` & `BUILD_PLAN_v8` (incl. Amendments A–G) | In review | Replaced role bootstrap with `0000_bootstrap_migrator.sql` (`migrator` role), added `DB_v7.sql` byte-for-byte as `0001_DB_v7.sql`, added `db/operator/0001_post_migration.sql`, silenced secret output via `\gset` + CI dummy-password hygiene gate, added `db/tests/test_v7.py` with DB-scoped `ALTER DATABASE <DB> SET track_functions='all'` via `ADMIN_ROLE`, split CI into Job A (`test_v7.py`) and Job B (`npm test` + `GET /` `200 text/html` smoke test), implemented exact string-parsing Money conversion boundary in `packages/shared`, added `docs/BUILD_PLAN_v8.md` and `docs/SCHEMA_MIGRATION_BACKLOG_v8.md` (`OQ-006` closed), dropped `.git` & `bun.lock`, updated `.gitignore`, `.env.example`, and docs. |
 
-## Explicitly Out of Scope (Phase 1)
-- Bookings / service catalog
-- Recurring subscriptions
-- Accounting, profit & loss, and tax reporting
-- Abandoned-checkout recovery campaigns
-- Vector search / AI customer sales conversational assistant
-- Telegram or multi-channel messaging
-- Multi-merchant marketplace / discovery portal
-- Custom merchant domains
-- Multi-item cart (single-item checkout only in Phase 1)
+## Explicitly Out of Scope (Phase 1 Pilot)
+- Bookings / appointment services (`FR-34`–`FR-38`, P3)
+- Subscriptions / balance withholding (`FR-16`, P2)
+- Accounting / expense logging / estimated profit (`FR-25`, `FR-26`, P2)
+- Abandoned-checkout recovery (`FR-39`, `FR-40`, P2)
+- Vector search / semantic RAG AI sales assistant (deferred part of `FR-4`)
+- Telegram or non-WhatsApp channels
+- Central marketplace directory (`FR-14`, P3)
+- Custom domains (column present in `DB_v7`, feature out of scope for Phase 1)
+- Multi-item cart (single-product checkout only in Phase 1)

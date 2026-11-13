@@ -7,20 +7,110 @@ on:
     branches: [main]
 
 jobs:
-  build-migrate-test:
-    name: Typecheck, Build, Migrate, Scan & Test
+  db-tests:
+    name: DB Foundation & RLS Behavioral Tests (Job A)
     runs-on: ubuntu-latest
 
     services:
       postgres:
         image: postgres:16-alpine
         env:
+          # Ephemeral trust auth for CI only; production must never use trust for vitrine_* roles.
           POSTGRES_HOST_AUTH_METHOD: trust
-          POSTGRES_DB: vitrine_test
+          POSTGRES_DB: vt_db_test
         ports:
           - 5432:5432
         options: >-
-          --health-cmd="pg_isready -U postgres -d vitrine_test"
+          --health-cmd="pg_isready -U postgres -d vt_db_test"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Generate ephemeral migrator password
+        run: |
+          MIGRATOR_PASSWORD="$(openssl rand -hex 24)"
+          echo "::add-mask::$MIGRATOR_PASSWORD"
+          echo "MIGRATOR_PASSWORD=$MIGRATOR_PASSWORD" >> "$GITHUB_ENV"
+
+      - name: Verify bootstrap SQL secret hygiene (dummy password check)
+        run: |
+          set -euo pipefail
+          DUMMY_PW="vitrine_dummy_secret_check_987654"
+          psql -h localhost -p 5432 -U postgres -d vt_db_test \
+            -v ON_ERROR_STOP=1 \
+            -v migrator_role="migrator" \
+            -v migrator_password="$DUMMY_PW" \
+            -f db/bootstrap/0000_bootstrap_migrator.sql > /tmp/bootstrap_hygiene.log 2>&1
+          if grep -Fq "$DUMMY_PW" /tmp/bootstrap_hygiene.log; then
+            echo "ERROR: Bootstrap SQL printed secret material to stdout/stderr!"
+            rm -f /tmp/bootstrap_hygiene.log
+            exit 1
+          fi
+          rm -f /tmp/bootstrap_hygiene.log
+          echo "Bootstrap secret hygiene check passed."
+
+      - name: Bootstrap migrator role (PostgreSQL 16)
+        run: |
+          psql -h localhost -p 5432 -U postgres -d vt_db_test \
+            -v ON_ERROR_STOP=1 \
+            -v migrator_role="migrator" \
+            -v migrator_password="$MIGRATOR_PASSWORD" \
+            -f db/bootstrap/0000_bootstrap_migrator.sql
+
+      - name: Verify Migration Ordering & Naming
+        run: |
+          python3 -c '
+          import os, re
+          files = sorted(f for f in os.listdir("db/migrations") if f.endswith(".sql"))
+          assert files, "No SQL migration files found in db/migrations"
+          prev = 0
+          for f in files:
+              m = re.match(r"^(\d{4})_[A-Za-z0-9_]+\.sql$", f)
+              assert m, f"Invalid migration filename format: {f}"
+              num = int(m.group(1))
+              assert num > prev, f"Out-of-order or duplicate migration prefix in: {f}"
+              prev = num
+          print("Migration order verified:", ", ".join(files))
+          '
+
+      - name: Apply Migrations as migrator
+        run: |
+          for migration in $(ls db/migrations/*.sql | sort); do
+            echo "Applying $migration..."
+            psql -h localhost -p 5432 -U migrator -d vt_db_test \
+              -v ON_ERROR_STOP=1 \
+              -f "$migration"
+          done
+
+      - name: Run test_v7.py behavioral suite (without operator script)
+        env:
+          PGHOST: localhost
+          PGPORT: '5432'
+          PGDATABASE: vt_db_test
+        run: |
+          set -euo pipefail
+          python3 db/tests/test_v7.py | tee test_v7.log
+          grep -Fq "0 failed" test_v7.log
+
+  app-tests:
+    name: App Build, Secret Scan, Integration Tests & Smoke Test (Job B)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          # Ephemeral trust auth for CI only; production must never use trust for vitrine_* roles.
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: vitrine_app_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d vitrine_app_test"
           --health-interval=5s
           --health-timeout=5s
           --health-retries=5
@@ -38,26 +128,34 @@ jobs:
       - name: Install dependencies cleanly from lockfile
         run: npm ci
 
-      - name: Generate ephemeral CI database credentials
+      - name: Generate ephemeral CI database credentials & tenant secret
         run: |
           MIGRATOR_PASSWORD="$(openssl rand -hex 24)"
           APP_PASSWORD="$(openssl rand -hex 24)"
-          echo "::add-mask::$MIGRATOR_PASSWORD"
-          echo "::add-mask::$APP_PASSWORD"
+          PUBLIC_PASSWORD="$(openssl rand -hex 24)"
+          ADMIN_PASSWORD="$(openssl rand -hex 24)"
+          REGISTRATION_PASSWORD="$(openssl rand -hex 24)"
+          TENANT_CONTEXT_SECRET="$(openssl rand -hex 32)"
+          for secret in "$MIGRATOR_PASSWORD" "$APP_PASSWORD" "$PUBLIC_PASSWORD" "$ADMIN_PASSWORD" "$REGISTRATION_PASSWORD" "$TENANT_CONTEXT_SECRET"; do
+            echo "::add-mask::$secret"
+          done
           {
             echo "MIGRATOR_PASSWORD=$MIGRATOR_PASSWORD"
             echo "APP_PASSWORD=$APP_PASSWORD"
-            echo "DATABASE_MIGRATOR_URL=postgresql://vitrine_migrator:${MIGRATOR_PASSWORD}@localhost:5432/vitrine_test"
-            echo "DATABASE_URL=postgresql://vitrine_app:${APP_PASSWORD}@localhost:5432/vitrine_test"
+            echo "PUBLIC_PASSWORD=$PUBLIC_PASSWORD"
+            echo "ADMIN_PASSWORD=$ADMIN_PASSWORD"
+            echo "REGISTRATION_PASSWORD=$REGISTRATION_PASSWORD"
+            echo "TENANT_CONTEXT_SECRET=$TENANT_CONTEXT_SECRET"
+            echo "DATABASE_URL=postgresql://vitrine_app:${APP_PASSWORD}@localhost:5432/vitrine_app_test"
           } >> "$GITHUB_ENV"
 
-      - name: Bootstrap Database Roles (PostgreSQL 16)
+      - name: Bootstrap migrator role (PostgreSQL 16)
         run: |
-          psql -h localhost -p 5432 -U postgres -d vitrine_test \
+          psql -h localhost -p 5432 -U postgres -d vitrine_app_test \
             -v ON_ERROR_STOP=1 \
+            -v migrator_role="migrator" \
             -v migrator_password="$MIGRATOR_PASSWORD" \
-            -v app_password="$APP_PASSWORD" \
-            -f db/bootstrap/0000_bootstrap_roles.sql
+            -f db/bootstrap/0000_bootstrap_migrator.sql
 
       - name: Verify Migration Ordering & Naming
         run: |
@@ -82,12 +180,35 @@ jobs:
             console.log("Migration order verified:", files.join(", "));
           '
 
-      - name: Run Database Migrations as vitrine_migrator
+      - name: Apply Migrations as migrator
         run: |
           for migration in $(ls db/migrations/*.sql | sort); do
             echo "Applying $migration..."
-            psql "$DATABASE_MIGRATOR_URL" -v ON_ERROR_STOP=1 -f "$migration"
+            psql -h localhost -p 5432 -U migrator -d vitrine_app_test \
+              -v ON_ERROR_STOP=1 \
+              -f "$migration"
           done
+
+      - name: Run Operator Post-Migration Provisioning
+        run: |
+          set -euo pipefail
+          psql -h localhost -p 5432 -U migrator -d vitrine_app_test \
+            -v ON_ERROR_STOP=1 \
+            -v app_password="$APP_PASSWORD" \
+            -v public_password="$PUBLIC_PASSWORD" \
+            -v admin_password="$ADMIN_PASSWORD" \
+            -v registration_password="$REGISTRATION_PASSWORD" \
+            -v tenant_secret_hex="$TENANT_CONTEXT_SECRET" \
+            -f db/operator/0001_post_migration.sql > /tmp/operator_hygiene.log 2>&1
+          for secret in "$APP_PASSWORD" "$PUBLIC_PASSWORD" "$ADMIN_PASSWORD" "$REGISTRATION_PASSWORD" "$TENANT_CONTEXT_SECRET"; do
+            if grep -Fq "$secret" /tmp/operator_hygiene.log; then
+              echo "ERROR: Operator SQL printed secret material to stdout/stderr!"
+              rm -f /tmp/operator_hygiene.log
+              exit 1
+            fi
+          done
+          rm -f /tmp/operator_hygiene.log
+          echo "Operator post-migration provisioning and secret hygiene check passed."
 
       - name: Typecheck
         run: npm run typecheck
@@ -119,7 +240,10 @@ jobs:
             const clientFiles = ["dist/index.html"];
             if (fs.existsSync("dist/assets")) {
               for (const f of fs.readdirSync("dist/assets")) {
-                clientFiles.push(path.join("dist/assets", f));
+                const full = path.join("dist/assets", f);
+                if (fs.statSync(full).isFile()) {
+                  clientFiles.push(full);
+                }
               }
             }
             const findings = [];
@@ -151,12 +275,18 @@ jobs:
           NODE_ENV: production
           PORT: '3000'
         run: |
+          set -euo pipefail
           npm start &
           SERVER_PID=$!
           trap "kill $SERVER_PID 2>/dev/null || true" EXIT
           for i in $(seq 1 15); do
             if curl -fsS http://127.0.0.1:3000/health/live; then
               echo ""
+              ROOT_STATUS=$(curl -sS -o /tmp/smoke_root.html -D /tmp/smoke_headers.txt -w "%{http_code}" http://127.0.0.1:3000/)
+              echo "GET / returned HTTP $ROOT_STATUS"
+              test "$ROOT_STATUS" = "200"
+              grep -qi "^content-type: text/html" /tmp/smoke_headers.txt
+              grep -qi "<div id=\"root\">" /tmp/smoke_root.html
               echo "Production smoke test passed."
               exit 0
             fi
