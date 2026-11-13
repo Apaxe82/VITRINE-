@@ -81,17 +81,22 @@ export function formatMoney(money: Money): string {
 }
 
 /**
- * Health check response payload contract.
+ * Public liveness response payload contract (/health/live, /health, /api/health).
+ * Contains no environment or uptime metadata.
  */
-export interface HealthStatusResponse {
-  status: 'ok' | 'degraded' | 'error';
+export interface HealthLiveResponse {
+  status: 'ok';
   service: string;
-  version: string;
   timestamp: string;
-  uptimeSeconds: number;
-  environment: string;
-  checks: {
-    system: 'ok';
-    database?: 'connected' | 'disconnected' | 'unconfigured';
-  };
+}
+
+/**
+ * Public readiness response payload contract (/health/ready).
+ * Reports database: "connected" only when SELECT 1 succeeds within timeout.
+ */
+export interface HealthReadyResponse {
+  status: 'ok' | 'error';
+  service: string;
+  timestamp: string;
+  database: 'connected' | 'disconnected';
 }

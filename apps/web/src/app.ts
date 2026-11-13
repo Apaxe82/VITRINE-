@@ -4,15 +4,19 @@
  */
 
 import express, { Express } from 'express';
-import { healthRouter } from './health.ts';
+import { createHealthRouter, type HealthRouterOptions } from './health.ts';
 
-export function createWebApp(): Express {
+export interface WebAppOptions {
+  health?: HealthRouterOptions;
+}
+
+export function createWebApp(options: WebAppOptions = {}): Express {
   const app = express();
 
   app.use(express.json());
 
-  // Mount health check router
-  app.use(healthRouter);
+  // Mount liveness & readiness health checks
+  app.use(createHealthRouter(options.health));
 
   return app;
 }

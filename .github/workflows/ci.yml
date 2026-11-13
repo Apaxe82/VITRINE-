@@ -7,24 +7,23 @@ on:
     branches: [main]
 
 jobs:
-  test:
-    name: Build, Migrate & Test
+  build-migrate-test:
+    name: Typecheck, Build, Migrate, Scan & Test
     runs-on: ubuntu-latest
 
     services:
       postgres:
         image: postgres:16-alpine
         env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgrespassword
+          POSTGRES_HOST_AUTH_METHOD: trust
           POSTGRES_DB: vitrine_test
         ports:
           - 5432:5432
         options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 5
+          --health-cmd="pg_isready -U postgres -d vitrine_test"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=5
 
     steps:
       - name: Check out repository
@@ -36,29 +35,132 @@ jobs:
           node-version: 22
           cache: 'npm'
 
-      - name: Install dependencies
+      - name: Install dependencies cleanly from lockfile
         run: npm ci
 
-      - name: Bootstrap Database Roles (PostgreSQL 16)
-        env:
-          PGPASSWORD: postgrespassword
+      - name: Generate ephemeral CI database credentials
         run: |
-          psql -h localhost -p 5432 -U postgres -d vitrine_test -f db/bootstrap/0000_bootstrap_roles.sql
+          MIGRATOR_PASSWORD="$(openssl rand -hex 24)"
+          APP_PASSWORD="$(openssl rand -hex 24)"
+          echo "::add-mask::$MIGRATOR_PASSWORD"
+          echo "::add-mask::$APP_PASSWORD"
+          {
+            echo "MIGRATOR_PASSWORD=$MIGRATOR_PASSWORD"
+            echo "APP_PASSWORD=$APP_PASSWORD"
+            echo "DATABASE_MIGRATOR_URL=postgresql://vitrine_migrator:${MIGRATOR_PASSWORD}@localhost:5432/vitrine_test"
+            echo "DATABASE_URL=postgresql://vitrine_app:${APP_PASSWORD}@localhost:5432/vitrine_test"
+          } >> "$GITHUB_ENV"
 
-      - name: Run Database Migrations
-        env:
-          PGPASSWORD: postgrespassword
+      - name: Bootstrap Database Roles (PostgreSQL 16)
+        run: |
+          psql -h localhost -p 5432 -U postgres -d vitrine_test \
+            -v ON_ERROR_STOP=1 \
+            -v migrator_password="$MIGRATOR_PASSWORD" \
+            -v app_password="$APP_PASSWORD" \
+            -f db/bootstrap/0000_bootstrap_roles.sql
+
+      - name: Verify Migration Ordering & Naming
+        run: |
+          node -e '
+            const fs = require("fs");
+            const files = fs.readdirSync("db/migrations").filter((f) => f.endsWith(".sql")).sort();
+            if (files.length === 0) {
+              throw new Error("No SQL migration files found in db/migrations");
+            }
+            let prev = 0;
+            for (const file of files) {
+              const match = /^(\d{4})_[A-Za-z0-9_]+\.sql$/.exec(file);
+              if (!match) {
+                throw new Error(`Invalid migration filename format: ${file}`);
+              }
+              const num = Number(match[1]);
+              if (num <= prev) {
+                throw new Error(`Out-of-order or duplicate migration prefix in: ${file}`);
+              }
+              prev = num;
+            }
+            console.log("Migration order verified:", files.join(", "));
+          '
+
+      - name: Run Database Migrations as vitrine_migrator
         run: |
           for migration in $(ls db/migrations/*.sql | sort); do
             echo "Applying $migration..."
-            psql -h localhost -p 5432 -U postgres -d vitrine_test -f "$migration"
+            psql "$DATABASE_MIGRATOR_URL" -v ON_ERROR_STOP=1 -f "$migration"
           done
 
-      - name: Typecheck and Lint
-        run: npm run lint
+      - name: Typecheck
+        run: npm run typecheck
 
-      - name: Run Test Suites
+      - name: Build Client & Server Bundles
+        run: npm run build
+
+      - name: Verify Client Bundle Contains No Secrets or .env.example Values
+        run: |
+          node -e '
+            const fs = require("fs");
+            const path = require("path");
+            const envLines = fs.readFileSync(".env.example", "utf8").split(/\r?\n/);
+            const ignoredScalars = new Set(["development", "production", "true", "false"]);
+            const envValues = [];
+            for (const line of envLines) {
+              const trimmed = line.trim();
+              if (!trimmed || trimmed.startsWith("#")) continue;
+              const eq = trimmed.indexOf("=");
+              if (eq === -1) continue;
+              const key = trimmed.slice(0, eq).trim();
+              let val = trimmed.slice(eq + 1).trim();
+              if ((val.startsWith("\"") && val.endsWith("\"")) || (val.startsWith("\x27") && val.endsWith("\x27"))) {
+                val = val.slice(1, -1);
+              }
+              if (!val || ignoredScalars.has(val) || /^\d+$/.test(val)) continue;
+              envValues.push({ key, val });
+            }
+            const clientFiles = ["dist/index.html"];
+            if (fs.existsSync("dist/assets")) {
+              for (const f of fs.readdirSync("dist/assets")) {
+                clientFiles.push(path.join("dist/assets", f));
+              }
+            }
+            const findings = [];
+            for (const file of clientFiles) {
+              const content = fs.readFileSync(file, "utf8");
+              if (content.includes("GEMINI")) findings.push(`${file}: contains "GEMINI"`);
+              if (content.includes("API_KEY")) findings.push(`${file}: contains "API_KEY"`);
+              for (const { key, val } of envValues) {
+                if (content.includes(val)) {
+                  findings.push(`${file}: contains .env.example value for ${key}`);
+                }
+              }
+            }
+            if (findings.length > 0) {
+              console.error("Client bundle leak check failed:\n" + findings.join("\n"));
+              process.exit(1);
+            }
+            console.log(`Client bundle secret scan passed (${clientFiles.length} files checked).`);
+          '
+
+      - name: Run Test Suites as vitrine_app
         env:
+          CI: 'true'
           NODE_ENV: test
-          DATABASE_URL: postgresql://vitrine_app:change_me@localhost:5432/vitrine_test
         run: npm test
+
+      - name: Production Smoke Test (dist/server.js)
+        env:
+          NODE_ENV: production
+          PORT: '3000'
+        run: |
+          npm start &
+          SERVER_PID=$!
+          trap "kill $SERVER_PID 2>/dev/null || true" EXIT
+          for i in $(seq 1 15); do
+            if curl -fsS http://127.0.0.1:3000/health/live; then
+              echo ""
+              echo "Production smoke test passed."
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Production smoke test failed: /health/live did not become reachable."
+          exit 1
