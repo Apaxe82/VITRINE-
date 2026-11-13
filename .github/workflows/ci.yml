@@ -147,7 +147,22 @@ jobs:
             echo "REGISTRATION_PASSWORD=$REGISTRATION_PASSWORD"
             echo "TENANT_CONTEXT_SECRET=$TENANT_CONTEXT_SECRET"
             echo "DATABASE_URL=postgresql://vitrine_app:${APP_PASSWORD}@localhost:5432/vitrine_app_test"
+            echo "DATABASE_MIGRATOR_URL=postgresql://migrator:${MIGRATOR_PASSWORD}@localhost:5432/vitrine_app_test"
           } >> "$GITHUB_ENV"
+
+      - name: Verify No Forbidden Cluster-Global Config Outside docs/
+        run: |
+          set -euo pipefail
+          FORBIDDEN_PATTERN="ALTER""[[:space:]]+SYSTEM|pg_reload""_conf"
+          if grep -rniE "$FORBIDDEN_PATTERN" . \
+            --exclude-dir=docs \
+            --exclude-dir=node_modules \
+            --exclude-dir=dist \
+            --exclude-dir=.git; then
+            echo "ERROR: Prohibited cluster-global PostgreSQL statements found outside docs/!"
+            exit 1
+          fi
+          echo "Verified zero cluster-global PostgreSQL statements outside docs/."
 
       - name: Bootstrap migrator role (PostgreSQL 16)
         run: |
@@ -180,14 +195,51 @@ jobs:
             console.log("Migration order verified:", files.join(", "));
           '
 
-      - name: Apply Migrations as migrator
+      - name: Apply Migrations via Runner (DB 1 — First Run + No-Op Re-Run)
         run: |
-          for migration in $(ls db/migrations/*.sql | sort); do
-            echo "Applying $migration..."
-            psql -h localhost -p 5432 -U migrator -d vitrine_app_test \
-              -v ON_ERROR_STOP=1 \
-              -f "$migration"
-          done
+          set -euo pipefail
+          npm run db:migrate
+          SECOND_OUT="$(npm run db:migrate)"
+          echo "$SECOND_OUT"
+          echo "$SECOND_OUT" | grep -Fq "No pending migrations"
+
+      - name: Verify Deployment Role & Membership Checks (DB 1)
+        run: npm run db:check
+
+      - name: Tamper Test (Modified Applied Migration Must Fail)
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/tampered_migrations
+          cp -r db/migrations /tmp/tampered_migrations
+          printf "\n-- tampered\n" >> /tmp/tampered_migrations/0001_DB_v7.sql
+          if MIGRATIONS_DIR=/tmp/tampered_migrations npm run db:migrate > /tmp/tamper.log 2>&1; then
+            echo "ERROR: Runner unexpectedly succeeded on tampered migration!"
+            cat /tmp/tamper.log
+            rm -rf /tmp/tampered_migrations /tmp/tamper.log
+            exit 1
+          fi
+          cat /tmp/tamper.log
+          grep -Fq "Checksum mismatch" /tmp/tamper.log
+          rm -rf /tmp/tampered_migrations /tmp/tamper.log
+          echo "Tamper check passed: modified applied migration was rejected."
+
+      - name: Verify Clean Bootstrap & Idempotent Runner on Second Empty Database (DB 2)
+        run: |
+          set -euo pipefail
+          psql -h localhost -p 5432 -U postgres -d vitrine_app_test \
+            -v ON_ERROR_STOP=1 \
+            -c "CREATE DATABASE vitrine_second_test;"
+          psql -h localhost -p 5432 -U postgres -d vitrine_second_test \
+            -v ON_ERROR_STOP=1 \
+            -v migrator_role="migrator" \
+            -v migrator_password="$MIGRATOR_PASSWORD" \
+            -f db/bootstrap/0000_bootstrap_migrator.sql
+          SECOND_DB_URL="postgresql://migrator:${MIGRATOR_PASSWORD}@localhost:5432/vitrine_second_test"
+          DATABASE_MIGRATOR_URL="$SECOND_DB_URL" npm run db:migrate
+          SECOND_RUN_OUT="$(DATABASE_MIGRATOR_URL="$SECOND_DB_URL" npm run db:migrate)"
+          echo "$SECOND_RUN_OUT"
+          echo "$SECOND_RUN_OUT" | grep -Fq "No pending migrations"
+          DATABASE_MIGRATOR_URL="$SECOND_DB_URL" npm run db:check
 
       - name: Run Operator Post-Migration Provisioning
         run: |

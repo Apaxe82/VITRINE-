@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed - 2026-11-13 (Task 1B: Migration Runner & Deployment Checks — Backlog Migration 00)
+- **TypeScript Migration Runner (`db/migrate.ts`, `npm run db:migrate`)**:
+  - Uses `pg` via `DATABASE_MIGRATOR_URL` (`migrator` role; rejects `vitrine_*` or superuser roles).
+  - Stores applied migrations in `schema_migrations.ledger` (never `public` or `vitrine_*`) with `filename` (PK), `checksum` (SHA-256), `applied_at`, `applied_by`, `app_version`, and `duration_ms`.
+  - Acquires session advisory lock (`pg_try_advisory_lock`), validates monotonic numeric order, refuses duplicate numbers, checksum drift, or out-of-order files, writes ledger row only after file execution commits (`DB_v7.sql` preserves its own `BEGIN`/`COMMIT`), enforces `MIGRATION_LOCK_TIMEOUT`/`MIGRATION_STATEMENT_TIMEOUT` on `0002+` (defaulting to off for `0001`), and runs as a no-op when up to date.
+- **Deployment Role & Membership Checks (`db/checks/deployment_checks.ts`, `npm run db:check`)**:
+  - Verifies the four runtime roles (`vitrine_app`, `vitrine_public`, `vitrine_admin`, `vitrine_registration`), internal roles, and `migrator` are NOT superusers and NOT `BYPASSRLS`, and verifies all `pg_auth_members` entries match an explicit repository allowlist.
+- **Tests & CI Hardening**:
+  - Added unit test suites `db/migrate.test.ts` and `db/checks/deployment_checks.test.ts`.
+  - Updated `.github/workflows/ci.yml` to run clean bootstrap + `npm run db:migrate` twice on two separate empty databases (`vitrine_app_test` and `vitrine_second_test`), verify second runner execution is a no-op, verify tampered migration copy fails, run `npm run db:check`, and fail the build if any file outside `docs/` contains prohibited cluster-global config/reload calls.
+- **Documentation**:
+  - Added `docs/DECISIONS/ADR-003-migration-runner.md`, documented backup/lock-timeout/deployment-role/recovery procedures in `docs/RUNBOOK.md`, updated `.env.example`, and marked `Task 1B` `In review` in `docs/STATUS.md`.
+
 ### Changed - 2026-11-13 (Task 1A.1: Remediation of Shipped Internal Files & Secret Scan Findings)
 - **Shipped Internal Files Removed & Guarded**:
   - Deleted `public/assets/aistudio/` and added `public/assets/aistudio/` to `.gitignore`.
@@ -28,7 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Amendment B (Drop `git init`)**:
   - Removed `.git/` directory so repository sync relies exclusively on AI Studio's GitHub integration; commit messages are suggested in the report only.
 - **Amendment C (`db/tests/test_v7.py` Database-Scoped `track_functions`)**:
-  - Replaced `ALTER SYSTEM SET track_functions='all'; SELECT pg_reload_conf();` with database-scoped `ALTER DATABASE "<DB>" SET track_functions='all';` executed as `ADMIN_ROLE` (env-overridable, default `postgres`). No assertions modified; no host-global changes.
+  - Replaced cluster-wide `track_functions` and global config reload calls with database-scoped `ALTER DATABASE "<DB>" SET track_functions='all';` executed as `ADMIN_ROLE` (env-overridable, default `postgres`). No assertions modified; no host-global changes.
 - **Amendment D (`docs/BUILD_PLAN_v8.md`, `docs/SCHEMA_MIGRATION_BACKLOG_v8.md` & `docs/OPEN_QUESTIONS.md`)**:
   - Added `docs/BUILD_PLAN_v8.md` and `docs/SCHEMA_MIGRATION_BACKLOG_v8.md` (byte-for-byte copies) and referenced FR IDs from `docs/BUILD_PLAN_v8.md` explicitly in `docs/STATUS.md`.
   - Updated `OQ-004` through `OQ-007` in `docs/OPEN_QUESTIONS.md` and closed `OQ-006`.

@@ -13,6 +13,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "worker:dev": "tsx apps/worker/src/index.ts",
+    "db:migrate": "tsx db/migrate.ts",
+    "db:check": "tsx db/checks/deployment_checks.ts",
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit"
